@@ -25,7 +25,6 @@
 //Constructor
 NAU7802::NAU7802()
 {
-  _i2cPort = nullptr; //Initialize to prevent undefined behavior if methods called before begin()
 }
 
 //Sets up the NAU7802 for basic function
