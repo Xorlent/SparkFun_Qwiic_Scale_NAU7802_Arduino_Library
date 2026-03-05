@@ -230,7 +230,7 @@ public:
   bool setChannel1Gain(uint32_t value); //Send a given value to be written to given address. Return true if successful
 
 private:
-  TwoWire *_i2cPort;                   //This stores the user's requested i2c port
+  TwoWire *_i2cPort = nullptr;                   //This stores the user's requested i2c port
   const uint8_t _deviceAddress = 0x2A; //Default unshifted 7-bit address of the NAU7802
 
   //y = mx+b
