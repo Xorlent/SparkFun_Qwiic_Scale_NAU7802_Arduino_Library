@@ -25,6 +25,7 @@
 //Constructor
 NAU7802::NAU7802()
 {
+  _i2cPort = nullptr; //Initialize to prevent undefined behavior if methods called before begin()
 }
 
 //Sets up the NAU7802 for basic function
@@ -168,6 +169,8 @@ bool NAU7802::setSampleRate(uint8_t rate)
   value &= 0b10001111; //Clear CRS bits
   value |= rate << 4;  //Mask in new CRS bits
 
+  _currentSampleRate = rate; //Store for smart delay calculations
+
   return (setRegister(NAU7802_CTRL2, value));
 }
 
@@ -206,7 +209,7 @@ bool NAU7802::powerDown()
   return (clearBit(NAU7802_PU_CTRL_PUA, NAU7802_PU_CTRL));
 }
 
-//Resets all registers to Power Of Defaults
+//Resets all registers to Power On Defaults
 bool NAU7802::reset()
 {
   setBit(NAU7802_PU_CTRL_RR, NAU7802_PU_CTRL); //Set RR
@@ -274,22 +277,34 @@ int32_t NAU7802::getAverage(uint8_t averageAmount, unsigned long timeout_ms)
   int32_t total = 0; // Readings are 24-bit. We're good to average 255 if needed
   uint8_t samplesAquired = 0;
 
+  uint8_t samplePeriod_ms = getSamplePeriod_ms();
   unsigned long startTime = millis();
-  while (1)
+  
+  while (samplesAquired < averageAmount)
   {
-    if (available() == true)
+    if (available())
     {
       total += getReading();
-      if (++samplesAquired == averageAmount)
-        break; //All done
+      samplesAquired++;
+      
+      //Sleep until next sample is ready
+      if (samplesAquired < averageAmount && samplePeriod_ms > 1)
+      {
+        delay(samplePeriod_ms);
+      }
     }
+    
     if (millis() - startTime > timeout_ms)
-      return (0); //Timeout - Bail with error
-    delay(1);
+    {
+      //Timeout occurred - return average of samples successfully collected
+      if (samplesAquired > 0)
+        return (total / samplesAquired);
+      else
+        return (0); //No samples collected
+    }
   }
-  total /= averageAmount;
 
-  return (total);
+  return (total / samplesAquired);
 }
 
 //Call when scale is setup, level, at running temperature, with nothing on it
@@ -312,6 +327,10 @@ int32_t NAU7802::getZeroOffset()
 //Call after zeroing. Provide the float weight sitting on scale. Units do not matter.
 void NAU7802::calculateCalibrationFactor(float weightOnScale, uint8_t averageAmount, unsigned long timeout_ms)
 {
+  //Prevent division by zero - can't calibrate with zero weight
+  if (weightOnScale == 0)
+    return; //Leave calibration factor unchanged
+  
   int32_t onScale = getAverage(averageAmount, timeout_ms);
   float newCalFactor = ((float)(onScale - _zeroOffset)) / weightOnScale;
   setCalibrationFactor(newCalFactor);
@@ -322,6 +341,12 @@ void NAU7802::calculateCalibrationFactor(float weightOnScale, uint8_t averageAmo
 void NAU7802::setCalibrationFactor(float newCalFactor)
 {
   _calibrationFactor = newCalFactor;
+  
+  //Cache reciprocal for fast multiplication in getWeight()
+  if (newCalFactor != 0)
+    _calibrationFactorReciprocal = 1.0 / newCalFactor;
+  else
+    _calibrationFactorReciprocal = 1.0; //Default to 1.0 to return raw readings if uncalibrated
 }
 
 float NAU7802::getCalibrationFactor()
@@ -343,7 +368,7 @@ float NAU7802::getWeight(bool allowNegativeWeights, uint8_t samplesToTake, unsig
       onScale = _zeroOffset; //Force reading to zero
   }
 
-  float weight = ((float)(onScale - _zeroOffset)) / _calibrationFactor;
+  float weight = ((float)(onScale - _zeroOffset)) * _calibrationFactorReciprocal;
   return (weight);
 }
 
@@ -379,8 +404,8 @@ bool NAU7802::clearBit(uint8_t bitNumber, uint8_t registerAddress)
 bool NAU7802::getBit(uint8_t bitNumber, uint8_t registerAddress)
 {
   uint8_t value = getRegister(registerAddress);
-  value &= (1 << bitNumber); //Clear all but this bit
-  return (value);
+  value &= (1 << bitNumber); //Clear all but the requested bit
+  return (value != 0);  //Return true if the requested bit is set
 }
 
 //Get contents of a register
@@ -505,6 +530,20 @@ bool NAU7802::set32BitRegister(uint8_t registerAddress, uint32_t value)
   if (_i2cPort->endTransmission() != 0)
     return (false); //Sensor did not ACK
   return (true);
+}
+
+//Get the sample period in milliseconds based on current sample rate
+//Returns period rounded up plus 1ms safety margin to ensure sample is ready
+uint8_t NAU7802::getSamplePeriod_ms()
+{
+  switch (_currentSampleRate) {
+    case NAU7802_SPS_320: return 4;   // 3.125ms + margin
+    case NAU7802_SPS_80:  return 13;  // 12.5ms + margin
+    case NAU7802_SPS_40:  return 26;  // 25ms + margin
+    case NAU7802_SPS_20:  return 51;  // 50ms + margin
+    case NAU7802_SPS_10:  return 101; // 100ms + margin
+    default: return 13; // Default to 80 SPS
+  }
 }
 
 //Helper methods

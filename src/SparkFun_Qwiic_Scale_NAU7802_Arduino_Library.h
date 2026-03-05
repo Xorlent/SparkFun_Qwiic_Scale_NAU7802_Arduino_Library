@@ -236,7 +236,11 @@ private:
   //y = mx+b
   int32_t _zeroOffset = 0;        //This is b
   float _calibrationFactor = 1.0; //This is m. User provides this number so that we can output y when requested
+  float _calibrationFactorReciprocal = 1.0; //Cached reciprocal for fast multiplication instead of division
 
   unsigned long _ldoRampDelay = 250; //During begin, wait this many millis after configuring the LDO before performing calibrateAFE
+  uint8_t _currentSampleRate = NAU7802_SPS_80; //Track current sample rate for smart delays in getAverage()
+
+  uint8_t getSamplePeriod_ms(); //Get the sample period in milliseconds for the current sample rate
 };
 #endif
